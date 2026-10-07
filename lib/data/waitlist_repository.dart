@@ -4,60 +4,68 @@ import '../domain/waitlist_rules.dart';
 import '../models/party.dart';
 
 class WaitlistRepository {
-  const WaitlistRepository(this._database);
+  const WaitlistRepository(this._db);
 
-  final Database _database;
+  final Database _db;
+  static const _table = 'parties';
 
-  Future<Party> add({required String name, required String size}) async {
-    final nameError = validateName(name);
-    if (nameError != null) {
-      throw ValidationException(nameError);
-    }
-    final sizeError = validatePartySizeInput(size);
-    if (sizeError != null) {
-      throw ValidationException(sizeError);
-    }
-
-    final parsedSize = parsePartySize(size)!;
-    final trimmedName = name.trim();
-    final joinedAt = DateTime.now().millisecondsSinceEpoch;
-    final ticket = await _database.insert('parties', {
-      'name': trimmedName,
-      'size': parsedSize,
-      'status': PartyStatus.waiting.name,
-      'joined_at': joinedAt,
-    });
-    return Party(
-      ticket: ticket,
-      name: trimmedName,
-      size: parsedSize,
-      status: PartyStatus.waiting,
-      joinedAt: joinedAt,
-    );
+  Future<int> add({required String name, required int size}) async {
+    final row = {
+      'name': validateName(name),
+      'size': validatePartySize(size),
+      'status': PartyStatus.waiting.dbValue,
+      'joined_at': DateTime.now().millisecondsSinceEpoch,
+    };
+    return _db.insert(_table, row);
   }
 
   Future<List<Party>> getWaiting() async {
-    final rows = await _database.query(
-      'parties',
+    final rows = await _db.query(
+      _table,
       where: 'status = ?',
-      whereArgs: [PartyStatus.waiting.name],
+      whereArgs: [PartyStatus.waiting.dbValue],
       orderBy: 'ticket ASC',
     );
-    return rows.map(Party.fromMap).toList(growable: false);
+    return rows.map(Party.fromMap).toList();
+  }
+
+  Future<List<Party>> getHistory() async {
+    final rows = await _db.query(
+      _table,
+      where: 'status = ?',
+      whereArgs: [PartyStatus.removed.dbValue],
+      orderBy: 'removed_at DESC, ticket DESC',
+    );
+    return rows.map(Party.fromMap).toList();
+  }
+
+  Future<void> update(Party party) async {
+    await _db.update(
+      _table,
+      {'name': validateName(party.name), 'size': validatePartySize(party.size)},
+      where: 'ticket = ? AND status = ?',
+      whereArgs: [party.ticket, PartyStatus.waiting.dbValue],
+    );
   }
 
   Future<void> remove(int ticket) async {
-    final count = await _database.update(
-      'parties',
+    await _db.update(
+      _table,
       {
-        'status': PartyStatus.removed.name,
+        'status': PartyStatus.removed.dbValue,
         'removed_at': DateTime.now().millisecondsSinceEpoch,
       },
       where: 'ticket = ? AND status = ?',
-      whereArgs: [ticket, PartyStatus.waiting.name],
+      whereArgs: [ticket, PartyStatus.waiting.dbValue],
     );
-    if (count != 1) {
-      throw Exception('That party is no longer waiting.');
-    }
+  }
+
+  Future<void> restore(int ticket) async {
+    await _db.update(
+      _table,
+      {'status': PartyStatus.waiting.dbValue, 'removed_at': null},
+      where: 'ticket = ? AND status = ?',
+      whereArgs: [ticket, PartyStatus.removed.dbValue],
+    );
   }
 }

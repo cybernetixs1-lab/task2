@@ -4,111 +4,161 @@ import 'package:provider/provider.dart';
 import '../domain/waitlist_rules.dart';
 import '../models/party.dart';
 import '../state/waitlist_controller.dart';
-import 'add_party_sheet.dart';
+import 'history_screen.dart';
+import 'party_form_sheet.dart';
 
 class WaitlistScreen extends StatelessWidget {
   const WaitlistScreen({super.key});
 
-  Future<void> _addParty(BuildContext context) async {
-    final party = await showModalBottomSheet<Party>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) => const AddPartySheet(),
-    );
-    if (!context.mounted || party == null) {
-      return;
-    }
-    await showDialog<void>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Ticket #${party.ticket}'),
-        content: const Text('Tell the party their ticket number.'),
+  @override
+  Widget build(BuildContext context) {
+    final controller = context.watch<WaitlistController>();
+    final isReady = controller.status == LoadStatus.ready;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Waitlist'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Done'),
+          IconButton(
+            tooltip: 'History',
+            icon: const Icon(Icons.history),
+            onPressed: () {
+              ScaffoldMessenger.of(context).hideCurrentSnackBar();
+              Navigator.push(
+                context,
+                MaterialPageRoute<void>(builder: (_) => const HistoryScreen()),
+              );
+            },
           ),
         ],
       ),
+      body: switch (controller.status) {
+        LoadStatus.loading => const Center(child: CircularProgressIndicator()),
+        LoadStatus.error => _ErrorView(onRetry: controller.retry),
+        LoadStatus.ready => _WaitingList(
+          entries: controller.entries,
+          isBusy: controller.isBusy,
+        ),
+      },
+      floatingActionButton: isReady
+          ? FloatingActionButton.extended(
+              onPressed: () => showAddPartySheet(context),
+              icon: const Icon(Icons.person_add),
+              label: const Text('Add party'),
+            )
+          : null,
     );
   }
+}
 
-  Future<void> _removeParty(
-    BuildContext context,
-    WaitlistController controller,
-    int ticket,
-  ) async {
-    final removed = await controller.removeParty(ticket);
-    if (!context.mounted || removed) {
-      return;
-    }
-    final error = controller.lastError;
-    if (error != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error)));
-    }
-  }
+class _WaitingList extends StatelessWidget {
+  const _WaitingList({required this.entries, required this.isBusy});
+
+  final List<QueueEntry> entries;
+  final bool isBusy;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Waitlist')),
-      body: Consumer<WaitlistController>(
-        builder: (context, controller, child) {
-          if (controller.isLoading) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (controller.loadError != null) {
-            return Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(controller.loadError!),
-                  const SizedBox(height: 12),
-                  FilledButton.icon(
-                    onPressed: controller.load,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Retry'),
-                  ),
-                ],
+    if (entries.isEmpty) {
+      return const Center(child: Text('No parties waiting'));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.only(bottom: 88),
+      itemCount: entries.length,
+      itemBuilder: (context, index) {
+        final entry = entries[index];
+        final party = entry.party;
+        final wait = estimatedWaitLabel(entry.partiesAhead);
+        return ListTile(
+          key: ValueKey(party.ticket),
+          leading: Text(
+            '#${party.ticket}',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          title: Text(party.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(
+            [
+              'Party of ${party.size}',
+              partiesAheadLabel(entry.partiesAhead),
+              ?wait,
+            ].join(' · '),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                tooltip: 'Edit',
+                icon: const Icon(Icons.edit_outlined),
+                onPressed: isBusy
+                    ? null
+                    : () => showEditPartySheet(context, party),
               ),
-            );
-          }
-          if (controller.entries.isEmpty) {
-            return const Center(child: Text('No parties waiting'));
-          }
-          return ListView.builder(
-            itemCount: controller.entries.length,
-            itemBuilder: (context, index) {
-              final entry = controller.entries[index];
-              final party = entry.party;
-              return ListTile(
-                key: ValueKey(party.ticket),
-                leading: CircleAvatar(child: Text('#${party.ticket}')),
-                title: Text(
-                  party.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                subtitle: Text(
-                  '${party.size} ${party.size == 1 ? 'person' : 'people'} - '
-                  '${partiesAheadLabel(entry.partiesAhead)}',
-                ),
-                trailing: IconButton(
-                  tooltip: 'Remove party',
-                  onPressed: () =>
-                      _removeParty(context, controller, party.ticket),
-                  icon: const Icon(Icons.remove_circle_outline),
-                ),
-              );
-            },
-          );
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _addParty(context),
-        icon: const Icon(Icons.person_add_alt_1),
-        label: const Text('Add party'),
+              IconButton(
+                tooltip: 'Remove',
+                icon: const Icon(Icons.close),
+                onPressed: isBusy ? null : () => _remove(context, party),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _remove(BuildContext context, Party party) async {
+    final controller = context.read<WaitlistController>();
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      if (!await controller.removeParty(party.ticket)) return;
+    } on Exception {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text("Couldn't remove #${party.ticket}. Please try again."),
+        ),
+      );
+      return;
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Removed #${party.ticket} ${party.name}'),
+          action: SnackBarAction(
+            label: 'Undo',
+            onPressed: () => _undo(controller, messenger),
+          ),
+        ),
+      );
+  }
+
+  Future<void> _undo(
+    WaitlistController controller,
+    ScaffoldMessengerState messenger,
+  ) async {
+    try {
+      await controller.undoLastRemoval();
+    } on Exception {
+      messenger.showSnackBar(
+        const SnackBar(content: Text("Couldn't undo. Please try again.")),
+      );
+    }
+  }
+}
+
+class _ErrorView extends StatelessWidget {
+  const _ErrorView({required this.onRetry});
+
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text("Couldn't load the waitlist."),
+          const SizedBox(height: 12),
+          FilledButton(onPressed: onRetry, child: const Text('Retry')),
+        ],
       ),
     );
   }

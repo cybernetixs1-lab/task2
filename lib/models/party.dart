@@ -1,4 +1,14 @@
-enum PartyStatus { waiting, removed }
+enum PartyStatus {
+  waiting('waiting'),
+  removed('removed');
+
+  const PartyStatus(this.dbValue);
+
+  final String dbValue;
+
+  static PartyStatus fromDb(String value) =>
+      values.firstWhere((status) => status.dbValue == value);
+}
 
 class Party {
   const Party({
@@ -14,17 +24,20 @@ class Party {
   final String name;
   final int size;
   final PartyStatus status;
-  final int joinedAt;
-  final int? removedAt;
+  final DateTime joinedAt;
+  final DateTime? removedAt;
 
   factory Party.fromMap(Map<String, Object?> map) {
+    final removedAt = map['removed_at'] as int?;
     return Party(
-      ticket: map['ticket']! as int,
-      name: map['name']! as String,
-      size: map['size']! as int,
-      status: PartyStatus.values.byName(map['status']! as String),
-      joinedAt: map['joined_at']! as int,
-      removedAt: map['removed_at'] as int?,
+      ticket: map['ticket'] as int,
+      name: map['name'] as String,
+      size: map['size'] as int,
+      status: PartyStatus.fromDb(map['status'] as String),
+      joinedAt: DateTime.fromMillisecondsSinceEpoch(map['joined_at'] as int),
+      removedAt: removedAt == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(removedAt),
     );
   }
 
@@ -33,9 +46,9 @@ class Party {
       'ticket': ticket,
       'name': name,
       'size': size,
-      'status': status.name,
-      'joined_at': joinedAt,
-      'removed_at': removedAt,
+      'status': status.dbValue,
+      'joined_at': joinedAt.millisecondsSinceEpoch,
+      'removed_at': removedAt?.millisecondsSinceEpoch,
     };
   }
 

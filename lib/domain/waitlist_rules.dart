@@ -1,3 +1,5 @@
+const avgMinutesPerParty = 10;
+
 class ValidationException implements Exception {
   const ValidationException(this.message);
 
@@ -7,61 +9,63 @@ class ValidationException implements Exception {
   String toString() => message;
 }
 
-String? validateName(String value) {
-  if (value.trim().isEmpty) {
-    return 'Enter a name.';
+String validateName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) {
+    throw const ValidationException('Enter a name.');
   }
-  return null;
+  return trimmed;
 }
 
-String? validatePartySize(int? size) {
-  if (size == null) {
-    return 'Enter the party size.';
-  }
+int validatePartySize(int size) {
   if (size <= 0) {
-    return 'Party size must be at least 1.';
+    throw const ValidationException('Party size must be at least 1.');
   }
-  return null;
+  return size;
 }
 
-int? parsePartySize(String value) {
-  final normalized = value.split('').map((character) {
-    final code = character.codeUnitAt(0);
-    if (code >= 0x0660 && code <= 0x0669) {
-      return String.fromCharCode(code - 0x0660 + 0x30);
-    }
-    return character;
-  }).join();
-  return int.tryParse(normalized.trim());
-}
-
-String? validatePartySizeInput(String value) {
-  if (value.trim().isEmpty) {
-    return validatePartySize(null);
+int parsePartySize(String input) {
+  final digits = _normaliseDigits(input.trim());
+  if (digits.isEmpty) {
+    throw const ValidationException('Enter the party size.');
   }
-  final size = parsePartySize(value);
+  final size = int.tryParse(digits, radix: 10);
   if (size == null) {
-    final digitsOnly = RegExp(r'^[0-9\u0660-\u0669]+$');
-    return digitsOnly.hasMatch(value.trim())
-        ? 'That number is too large.'
-        : 'Enter a whole number.';
+    throw ValidationException(
+      _onlyDigits.hasMatch(digits)
+          ? 'That number is too large.'
+          : 'Enter a whole number.',
+    );
   }
   return validatePartySize(size);
 }
 
-String errorMessageOf(Object error) {
-  if (error is ValidationException) {
+String partiesAheadLabel(int partiesAhead) => switch (partiesAhead) {
+  0 => 'Next',
+  1 => '1 party ahead',
+  _ => '$partiesAhead parties ahead',
+};
+
+String? estimatedWaitLabel(int partiesAhead) =>
+    partiesAhead == 0 ? null : '≈ ${partiesAhead * avgMinutesPerParty} min';
+
+String? errorMessageOf(void Function() rule) {
+  try {
+    rule();
+    return null;
+  } on ValidationException catch (error) {
     return error.message;
   }
-  return 'Something went wrong. Please try again.';
 }
 
-String partiesAheadLabel(int partiesAhead) {
-  if (partiesAhead <= 0) {
-    return 'Next';
+final _onlyDigits = RegExp(r'^[0-9]+$');
+
+const _easternArabicDigits = '٠١٢٣٤٥٦٧٨٩';
+
+String _normaliseDigits(String input) {
+  var result = input;
+  for (var index = 0; index < _easternArabicDigits.length; index++) {
+    result = result.replaceAll(_easternArabicDigits[index], '$index');
   }
-  if (partiesAhead == 1) {
-    return '1 party ahead';
-  }
-  return '$partiesAhead parties ahead';
+  return result;
 }

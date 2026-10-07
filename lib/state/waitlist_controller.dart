@@ -1,99 +1,87 @@
 import 'package:flutter/foundation.dart';
 
 import '../data/waitlist_repository.dart';
-import '../domain/waitlist_rules.dart';
 import '../models/party.dart';
 
-class WaitingPartyEntry {
-  const WaitingPartyEntry({required this.party, required this.partiesAhead});
+enum LoadStatus { loading, ready, error }
 
-  final Party party;
-  final int partiesAhead;
-}
+typedef QueueEntry = ({Party party, int partiesAhead});
 
 class WaitlistController extends ChangeNotifier {
   WaitlistController(this._repository);
 
   final WaitlistRepository _repository;
 
-  List<WaitingPartyEntry> _entries = const [];
-  List<WaitingPartyEntry> get entries => _entries;
+  LoadStatus _status = LoadStatus.loading;
+  List<Party> _waiting = const [];
+  bool _isBusy = false;
+  int? _lastRemovedTicket;
 
-  bool _isLoading = true;
-  bool get isLoading => _isLoading;
+  LoadStatus get status => _status;
+  bool get isBusy => _isBusy;
 
-  bool _isSaving = false;
-  bool get isSaving => _isSaving;
-
-  String? _loadError;
-  String? get loadError => _loadError;
-
-  String? _lastError;
-  String? get lastError => _lastError;
+  List<QueueEntry> get entries => List.generate(
+    _waiting.length,
+    (index) => (party: _waiting[index], partiesAhead: index),
+  );
 
   Future<void> load() async {
-    _isLoading = true;
-    _loadError = null;
-    notifyListeners();
     try {
-      _entries = _buildEntries(await _repository.getWaiting());
-    } on Exception catch (error) {
-      _loadError = errorMessageOf(error);
-    } finally {
-      _isLoading = false;
-      notifyListeners();
+      _waiting = await _repository.getWaiting();
+      _status = LoadStatus.ready;
+    } on Exception {
+      _status = LoadStatus.error;
     }
+    notifyListeners();
   }
 
-  Future<Party?> addParty({required String name, required String size}) async {
-    if (_isSaving) {
-      return null;
-    }
-    _isSaving = true;
-    _lastError = null;
+  Future<void> retry() {
+    _status = LoadStatus.loading;
     notifyListeners();
-    try {
-      final addedParty = await _repository.add(name: name, size: size);
-      try {
-        _entries = _buildEntries(await _repository.getWaiting());
-        _loadError = null;
-      } on Exception catch (error) {
-        _loadError = errorMessageOf(error);
-      }
-      return addedParty;
-    } on Exception catch (error) {
-      _lastError = errorMessageOf(error);
-      return null;
-    } finally {
-      _isSaving = false;
-      notifyListeners();
-    }
+    return load();
   }
+
+  Future<List<Party>> loadHistory() => _repository.getHistory();
+
+  Future<int?> addParty({required String name, required int size}) async {
+    int? ticket;
+    await _write(() async {
+      ticket = await _repository.add(name: name, size: size);
+    });
+    return ticket;
+  }
+
+  Future<bool> editParty(Party edited) =>
+      _write(() => _repository.update(edited));
 
   Future<bool> removeParty(int ticket) async {
-    _lastError = null;
-    try {
-      await _repository.remove(ticket);
-    } on Exception catch (error) {
-      _lastError = errorMessageOf(error);
-      notifyListeners();
-      return false;
-    }
-
-    try {
-      _entries = _buildEntries(await _repository.getWaiting());
-      _loadError = null;
-    } on Exception catch (error) {
-      _loadError = errorMessageOf(error);
-    }
-    notifyListeners();
-    return true;
+    final removed = await _write(() => _repository.remove(ticket));
+    if (removed) _lastRemovedTicket = ticket;
+    return removed;
   }
 
-  List<WaitingPartyEntry> _buildEntries(List<Party> parties) {
-    return List<WaitingPartyEntry>.unmodifiable([
-      for (var index = 0; index < parties.length; index++)
-        WaitingPartyEntry(party: parties[index], partiesAhead: index),
-    ]);
+  Future<void> undoLastRemoval() async {
+    final ticket = _lastRemovedTicket;
+    if (ticket == null) return;
+    if (await _write(() => _repository.restore(ticket))) {
+      _lastRemovedTicket = null;
+    }
+  }
+
+  Future<bool> _write(Future<void> Function() write) async {
+    if (_isBusy) return false;
+    _setBusy(true);
+    try {
+      await write();
+      await load();
+      return true;
+    } finally {
+      _setBusy(false);
+    }
+  }
+
+  void _setBusy(bool value) {
+    _isBusy = value;
+    notifyListeners();
   }
 }

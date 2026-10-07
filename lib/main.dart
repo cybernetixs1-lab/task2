@@ -8,21 +8,24 @@ import 'ui/waitlist_screen.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final database = await AppDatabase.open();
-  final controller = WaitlistController(WaitlistRepository(database));
-  await controller.load();
-  runApp(ChangeNotifierProvider.value(value: controller, child: const MyApp()));
+  final database = await openAppDatabase();
+  runApp(
+    ChangeNotifierProvider(
+      create: (_) => WaitlistController(WaitlistRepository(database))..load(),
+      child: const WaitlistApp(),
+    ),
+  );
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class WaitlistApp extends StatelessWidget {
+  const WaitlistApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Waitlist',
-      theme: ThemeData(colorScheme: .fromSeed(seedColor: Colors.teal)),
+      theme: ThemeData(colorSchemeSeed: Colors.indigo),
       home: const WaitlistScreen(),
     );
   }
