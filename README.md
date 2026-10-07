@@ -36,23 +36,29 @@ Flutter gives one Dart codebase with a fast Android build, which fits the timebo
 
 **Not complete**
 
-- There are no automated tests, which are out of scope. The Phase 2/3 flows still need manual verification on an Android emulator.
+- There are no automated tests, which are out of scope. Every flow was checked manually on an Android emulator.
 - The app only targets Android. It was not run on iOS, web or desktop.
 - There is no backend, sync, login or notifications, as specified.
 
 ## 4. How I verified an AI suggestion
 
-> _Placeholder: to be written by the author from a real check._
->
-> - **Suggestion:**
-> - **How I checked it:**
-> - **Result and what I changed:**
+**Suggestion.** The AI-generated schema backs up rule R1 (a whitespace-only name counts as empty) at the database level with `CHECK (length(trim(name)) > 0)`, as a second line of defence behind the Dart validation.
+
+**How I checked it.** I ran the exact `CREATE TABLE` statement in a separate SQLite session (sqliteonline.com), so the app's data was not touched, and tried two inserts:
+
+```sql
+INSERT INTO parties (name, size, joined_at) VALUES ('   ', 2, 0);    -- rejected: CHECK constraint failed
+INSERT INTO parties (name, size, joined_at) VALUES (char(9), 2, 0);  -- accepted
+```
+
+**Result and what I changed.** The constraint only partly holds. SQLite's `trim()` removes spaces only, so a name made of a single tab passes the check. Dart's `String.trim()` removes all whitespace, so `validateName` in `lib/domain/waitlist_rules.dart` is the real protection: the form and the repository both call it before any write. I kept the `CHECK` as a backstop for space-only names, kept the Dart rule as the authoritative one, and documented the gap under Assumptions.
 
 ## 5. Assumptions
 
 - **Join order is ticket order.** The join timestamp is stored for display only, so changing the device clock cannot reorder the queue.
 - **"Parties ahead" counts parties, not people.** The first waiting party shows "Next". The value is calculated from the list every time and never stored.
 - **Party size has no upper limit.** Any whole number greater than 0 that fits in a 64-bit integer is accepted. Larger numbers are rejected as too large. Leading zeros are allowed, so "05" is saved as 5.
+- **The database check on names is only a partial backstop.** SQLite's `trim()` removes spaces only, so the Dart rule in `validateName` is what rejects names made only of tabs or other whitespace (see section 4).
 - **Names have no maximum length.** Only leading and trailing whitespace is removed, and long names are cut off with "…" in the list.
 - **Removed parties stay in the database** with status `removed`. Their tickets are therefore never issued again, and gaps in the numbering are expected.
 - **Clearing app data or uninstalling counts as a fresh install.** The queue is emptied and the numbering restarts at 1.
